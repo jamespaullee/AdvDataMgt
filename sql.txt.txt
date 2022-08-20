@@ -1,0 +1,244 @@
+-- (Rubric A: Business Report)
+-- BUSINESS PROBLEM: The DVD rental company would like to reward their top 25 customers
+-- based on their rental volume by sending a special coupon via email each month.
+-- REQUIREMENTS: A summary of top 25 customers by number of rentals and the rental details for all renters.
+
+
+-- (Rubric A1: Data Description)
+-- DATA TO BE USED: The data we'll be using in the report contains customer information
+-- and rental information. We'll also pull the film title from the film table for our
+-- details table. 
+
+
+-- (Rubric A2 & A3: Identifying specific tables & fields)
+-----------DETAILS TABLE----------------
+-- customer_id from the customer table
+-- first_name from the customer table
+-- last_name from the customer table
+-- customer_full_name from the customer table (custom transformation)
+-- email from the customer table
+-- rental_id from the rental table
+-- film_title from the film table
+-- rental_date from the rental table
+-- return_date from the rental table
+
+
+-----------SUMMARY TABLE----------------
+-- customer_id from the customer table
+-- customer_full_name from the customer table (custom transformation)
+-- email from the customer table
+-- rental_count as a count of rental_id from the rental table
+
+
+-- (Rubric A4: Field Transformation)
+-- A field in the detailed section that will require a custom transformation is customer_full_name.
+-- This is a concatenated field of first_name and last_name. The transformation is helpful for
+-- stakeholders to succinctly identify a person by their entire identify, not just first or last name.
+
+-- (Rubric A5: Business Uses)
+-- The summary of this report will answer the business problem directly, enabling the 
+-- identification of top 25 customers by number of rentals with an email included for sending
+-- coupons. The detailed section of this report can be used to validate the summary table, 
+-- indicating when those rentals occured, when rentals were returned, and which films were rented.
+
+-- (Rubric A6: Report Freshness)
+-- Based on the frequency of coupon distribution as defined in the business problem, the procedure below 
+-- should be called monthly to keep the recipients of monthly coupons current.
+
+------------------------------------------------------------------------------------
+
+
+-- Let's make an empty details table.
+
+
+-- (Rubric B: Creating Tables)
+DROP TABLE IF EXISTS details;
+CREATE TABLE details (
+	customer_id integer,
+	first_name varchar (45),
+	last_name varchar (45),
+	customer_full_name varchar(95),
+	email varchar(90),
+	rental_id integer,
+	film_title varchar (255),
+	rental_date timestamp,
+	return_date timestamp
+);
+
+
+-- In the absence of an existing details table, a new table is created with the columns
+-- needed for the detail section of the report.
+
+-- Now we can verify that the empty table was created with the specified columns.
+
+
+SELECT * FROM details; 
+
+
+-- Next, we make an empty summary table.
+
+DROP TABLE IF EXISTS summary;
+CREATE TABLE summary(
+	customer_id integer,
+	customer_full_name varchar(95),
+	email varchar(90),
+	rental_count integer
+
+);
+
+
+-- In the absence of an existing summary table, a new table is created with the columns
+-- needed for the summary section of the report.
+
+-- Now we can verify that the empty table was created with the specified columns.
+
+
+SELECT * FROM summary; 
+
+
+-- We'll populate our details table with the query below. The first three columns coming
+-- from the customer table, the next coming from rental table, then the next coming from 
+-- film table, and the last two coming from the rental table again.
+
+
+-- (Rubric C & D: SQL Query and Function)
+INSERT INTO details(
+	customer_id,
+	first_name,
+	last_name,
+	customer_full_name,
+	email,
+	rental_id,
+	film_title,
+	rental_date,
+	return_date
+)
+SELECT 
+	c.customer_id,
+	c.first_name,
+	c.last_name,
+	concat_ws (' ', c.first_name, c.last_name) AS customer_full_name,
+	c.email,
+	r.rental_id,
+	f.title AS film_title,
+	r.rental_date,
+	r.return_date
+FROM rental AS r 
+INNER JOIN customer AS c ON c.customer_id = r.customer_id
+INNER JOIN inventory AS i ON i.inventory_id = r.inventory_id
+INNER JOIN film AS f ON f.film_id = i.film_id;
+
+
+-- Let's make sure everything was inserted correctly.
+
+
+SELECT * FROM details;
+
+
+-- Now we want to setup a function that will be referenced by a trigger. This function will
+-- clear the summary table and repopulate it with the top 25 customers by rental volume, as
+-- defined by the requirements.
+
+
+CREATE FUNCTION summary_refresh_function()
+RETURNS TRIGGER 
+LANGUAGE plpgsql
+AS $$ 
+BEGIN
+
+DELETE FROM summary;
+
+INSERT INTO summary (
+	SELECT 	
+		r.customer_id,
+		concat_ws (' ', c.first_name, c.last_name) AS customer_full_name,
+		c.email,
+		COUNT (r.rental_id) AS rental_count
+	FROM rental AS r
+	INNER JOIN customer AS c ON c.customer_id = r.customer_id
+	GROUP BY
+		r.customer_id,
+		customer_full_name,
+		c.email
+ORDER BY rental_count DESC
+LIMIT 25
+);
+
+RETURN NEW;
+END; $$
+
+
+-- Let's check to make sure that was created.
+
+-- A trigger is created using the query below. The trigger will execute the function we just 
+-- created upon inserts to the details table.
+
+
+-- (Rubric E: Trigger)
+CREATE TRIGGER summary_refresh
+AFTER INSERT ON details
+FOR EACH STATEMENT
+EXECUTE PROCEDURE summary_refresh_function();
+
+
+-- Let's check to make sure that was created.
+
+-- Finally, a procedure is created to refresh the report. It will clear the records from the details 
+-- table and re-populate the details table using the same query from above.
+
+-- (Rubric F: Stored Procedure)
+CREATE PROCEDURE refresh_report()
+LANGUAGE plpgsql
+AS $$ 
+BEGIN
+
+DELETE FROM details;
+
+INSERT INTO details(
+	customer_id,
+	first_name,
+	last_name,
+	customer_full_name,
+	email,
+	rental_id,
+	film_title,
+	rental_date,
+	return_date
+)
+SELECT 
+	c.customer_id,
+	c.first_name,
+	c.last_name,
+	concat_ws (' ', c.first_name, c.last_name) AS customer_full_name,
+	c.email,
+	r.rental_id,
+	f.title AS film_title,
+	r.rental_date,
+	r.return_date
+FROM rental AS r 
+INNER JOIN customer AS c ON c.customer_id = r.customer_id
+INNER JOIN inventory AS i ON i.inventory_id = r.inventory_id
+INNER JOIN film AS f ON f.film_id = i.film_id;
+
+END;$$
+
+
+-- Now that all of this is in place, we can test our function, trigger, and procedure to ensure
+-- that it's working as expected. Remembering that the summary table is currently empty, we should
+-- see records in the summary table upon calling 'refresh_report()'. This will purge the records 
+-- from details and re-insert records in to details. That will invoke the trigger function,
+-- ultimately populating the summary table.
+
+CALL refresh_report();
+
+
+-- (Rubric F1: Data Freshness)
+-- Using 'CALL refresh_report()' on a monthly cadence will satisfy the requirements as we previously defined
+
+
+SELECT * FROM details;
+
+SELECT * FROM summary;
+
+-- (Rubric H: Web Sources)
+-- I did not use any web sources to acquire data or segments of third-party code.
